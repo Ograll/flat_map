@@ -1,14 +1,11 @@
 cmake_minimum_required(VERSION 3.0)
 cmake_policy(SET CMP0054 NEW)
 
-find_package(Boost)
+#find_package(Boost)
+set(Boost_INCLUDE_DIRS /home/cdannemiller-d/Downloads/boost_1_81_0/boost)
 include_directories(${Boost_INCLUDE_DIRS})
 
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
-    add_definitions(--stdlib=libc++ -std=c++1z -O3)
-elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
-    add_definitions(-std=c++1y -O3)
-endif ()
+set(CXX_STD 17 CACHE STRING "Set to 17, 2a, or 20.")
 
 add_executable(perf_test ${CMAKE_SOURCE_DIR}/map_insertion_perf_tests.cpp)
 

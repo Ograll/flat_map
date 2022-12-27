@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <random>
 
 // Test instantiations.
 template class std::flat_map<std::string, int>;
@@ -799,4 +800,118 @@ TEST(std_flat_map, comparisons)
     EXPECT_LE(map_123, map_123);
     EXPECT_GE(map_123, map_123);
     EXPECT_GT(map_123, map_12);
+}
+
+TEST(std_flat_map, merge)
+{
+    {
+        using fmap_t = std::flat_map<int, int>;
+        fmap_t mapA({{ 2, 0}, { 4, 0 }, { 6, 0 }, { 7, 0 }, { 11, 0 }, { 12, 0 }});
+        fmap_t mapB({{ 1, 1}, { 4, 1 }, { 5, 1 }, { 7, 1 }, { 14, 1 }, { 16, 1 }});
+        fmap_t mapUnionABTest({{ 1, 1 }, { 2, 0 }, { 4, 0 }, { 5, 1 }, { 6, 0 }, { 7, 0 }, { 11, 0 }, { 12, 0 }, { 14, 1 }, { 16, 1 }});
+        fmap_t mapIsectABTest({{ 4, 1 }, { 7, 1 }});
+        fmap_t mapUnionAB = mapA;
+        fmap_t mapIsectAB = mapB;
+        mapUnionAB.merge(mapIsectAB);
+
+        EXPECT_EQ(mapUnionAB, mapUnionABTest);
+        EXPECT_EQ(mapIsectAB, mapIsectABTest);
+    }
+    {
+        using fmap_t = std::flat_map<std::string, std::string>;
+        using pair_t = std::pair<std::string, std::string>;
+
+        std::vector<pair_t> vecA({{ "13", "" }, { "15", "" }, { "16", "" }, { "2", "" }, { "3", "" }, { "5", "" }});
+        std::vector<pair_t> vecB({{ "3", "" }, { "4", "" }, { "5", "" }, { "9", "" }});
+
+        auto compare = [](const pair_t& a, const pair_t& b)
+            {
+                return a.first < b.first;
+            };
+
+        std::vector<pair_t> vecUnionAB;
+        std::vector<pair_t> vecIsectAB;
+        std::set_union(vecA.begin(), vecA.end(), vecB.begin(), vecB.end(), std::back_inserter(vecUnionAB), compare);
+        std::set_intersection(vecB.begin(), vecB.end(), vecA.begin(), vecA.end(), std::back_inserter(vecIsectAB), compare);
+
+        fmap_t mapUnionAB(vecA);
+        fmap_t mapIsectAB(vecB);
+        mapUnionAB.merge(mapIsectAB);
+        EXPECT_EQ(mapUnionAB, fmap_t(vecUnionAB));
+        EXPECT_EQ(mapIsectAB, fmap_t(vecIsectAB));
+    }
+    {
+        using fmap_t = std::flat_map<std::string, int>;
+        using pair_t = std::pair<std::string, int>;
+
+        std::vector<pair_t> const vecA = {{"key0", 0}, {"key1", 1}, {"key2", 2}};
+        std::vector<pair_t> const vecB = {{"key0", 3}, {"key4", 4}};
+
+        auto compare = [](const pair_t& a, const pair_t& b)
+            {
+                return a.first < b.first;
+            };
+
+        std::vector<pair_t> vecUnionAB;
+        std::vector<pair_t> vecIsectAB;
+        std::set_union(vecA.begin(), vecA.end(), vecB.begin(), vecB.end(), std::back_inserter(vecUnionAB), compare);
+        std::set_intersection(vecB.begin(), vecB.end(), vecA.begin(), vecA.end(), std::back_inserter(vecIsectAB), compare);
+
+        fmap_t mapUnionAB(vecA);
+        fmap_t mapIsectAB(vecB);
+        mapUnionAB.merge(mapIsectAB);
+        EXPECT_EQ(mapUnionAB, fmap_t(vecUnionAB));
+        EXPECT_EQ(mapIsectAB, fmap_t(vecIsectAB));
+    }
+}
+
+template <class _Gen>
+std::vector<std::pair<int, int>> makeVec(const std::vector<int> &pool, int& c, _Gen &gen)
+{
+    std::vector<std::pair<int, int>> result;
+    std::uniform_int_distribution<int> dist(0, pool.size() - 1);
+    int cnt = dist(gen);
+    std::vector<int> sampled;
+    std::sample(pool.begin(), pool.end(), std::back_inserter(sampled), cnt, gen);
+    for (auto sample : sampled)
+    {
+        result.emplace_back(sample, c++);
+    }
+    return result;
+}
+
+TEST(std_flat_map, merge_rand)
+{
+    using fmap_t = std::flat_map<int, int>;
+    using pair_t = std::pair<int, int>;
+
+    auto gen = std::mt19937{ std::random_device{}() };
+    std::vector<int> pool = {};
+    for (int i = 0; i < 10; i++)
+    {
+        pool.push_back(i);
+    }
+    for (size_t i = 0; i < 100000; i++)
+    {
+        int c = 0;
+        auto vecA = makeVec(pool, c, gen);
+        auto vecB = makeVec(pool, c, gen);
+
+        fmap_t mapA(vecA);
+        fmap_t mapB(vecB);
+        fmap_t mapUnionAB = mapA;
+        fmap_t mapIsectAB = mapB;
+        mapUnionAB.merge(mapIsectAB);
+
+        std::vector<pair_t> vecUnionAB, vecIsectAB;
+        auto compare = [](const pair_t& a, const pair_t& b)
+            {
+                return a.first < b.first;
+            };
+        std::set_union(vecA.begin(), vecA.end(), vecB.begin(), vecB.end(), std::back_inserter(vecUnionAB), compare);
+        std::set_intersection(vecB.begin(), vecB.end(), vecA.begin(), vecA.end(), std::back_inserter(vecIsectAB), compare);
+
+        EXPECT_EQ(mapUnionAB, fmap_t(vecUnionAB));
+        EXPECT_EQ(mapIsectAB, fmap_t(vecIsectAB));
+    }
 }

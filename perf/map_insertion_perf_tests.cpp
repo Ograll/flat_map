@@ -1,5 +1,7 @@
 #include <boost/container/flat_map.hpp>
 
+#include "../implementation/flat_map"
+
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -19,58 +21,8 @@ enum map_impl_kind
     num_map_impl_kinds
 };
 
-template <typename T, typename U, typename ValueType = std::pair<T, U>>
-struct split_map_t
-{
-    using const_iterator = typename std::vector<U>::const_iterator;
-
-    size_t size() const
-    { return values.size(); }
-
-    typename std::vector<U>::iterator lower_bound(T const & t)
-    {
-        auto const keys_it = std::lower_bound(keys.begin(), keys.end(), t);
-        return values.begin() + (keys_it - keys.begin());
-    }
-
-    typename std::vector<U>::iterator find(T const & t)
-    {
-        auto const it = lower_bound(t);
-        if (it != values.end() && *it == t)
-            return it;
-        return values.end();
-    }
-
-    U& operator[](T const & t)
-    {
-        auto const values_it = lower_bound(t);
-        if (values_it != values.end() && *values_it == t)
-            return *values_it;
-        auto const keys_it = keys.begin() + (values_it - values.begin());
-        keys.insert(keys_it, t);
-        return *values.insert(values_it, U());
-    }
-
-    void erase(T const & t)
-    {
-        auto values_it = find(t);
-        if (values_it != values.end()) {
-            auto const keys_it = keys.begin() + (values_it - values.begin());
-            keys.erase(keys_it);
-            values.erase(values_it);
-        }
-    }
-
-    std::vector<U> keys;
-    std::vector<U> values;
-};
-
 template <typename T, typename U>
-typename split_map_t<T, U>::const_iterator begin(split_map_t<T, U> const & c)
-{ return c.values.begin(); }
-template <typename T, typename U>
-typename split_map_t<T, U>::const_iterator end(split_map_t<T, U> const & c)
-{ return c.values.end(); }
+using split_map_t = std::flat_map<T, U>;
 
 template <typename KeyType, typename ValueType, map_impl_kind MapImpl>
 struct map_impl
@@ -125,11 +77,23 @@ double single_elapsed_value(std::vector<double> & times)
     return std::accumulate(times.begin() + 1, times.end() - 1, 0.0) / (times.size() - 2);
 }
 
+struct StopWatch
+{
+    StopWatch() : 
+        start(std::chrono::high_resolution_clock::now())
+    {
+    }
+    double observe() const
+    {
+        return std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count() * 1000;
+    }
+    using clock = std::chrono::high_resolution_clock;
+    clock::time_point start;
+};
+
 template <typename KeyType, typename ValueType, map_impl_kind MapImpl, int Iterations>
 void test_map_type(std::string kind_name, std::vector<int> const & v, output_files_t & output_files)
 {
-    using dur = std::chrono::duration<double>;
-
     using map_t = map_impl_t<KeyType, ValueType, MapImpl>;
 
     std::vector<map_t> maps(Iterations);
@@ -158,10 +122,9 @@ void test_map_type(std::string kind_name, std::vector<int> const & v, output_fil
                     other_map[key] = make_value<ValueType>();
                 }
                 auto const key = make_key<KeyType>(e);
-                auto start = std::chrono::high_resolution_clock::now();
+                StopWatch stopWatch;
                 map[key] = make_value<ValueType>();
-                auto stop = std::chrono::high_resolution_clock::now();
-                time += dur(stop - start).count() * 1000;
+                time += stopWatch.observe();
             }
             times.push_back(time);
         }
@@ -175,13 +138,13 @@ void test_map_type(std::string kind_name, std::vector<int> const & v, output_fil
         int copy_count = 0; // To ensure the optimizer does not remove the loops below altogether, do some work.
         for (auto const & map : maps) {
             std::vector<ValueType> values(map.size());
-            auto start = std::chrono::high_resolution_clock::now();
+                StopWatch stopWatch;
             std::transform(
                 begin(map), end(map), begin(values),
                 [](auto const & elem){ return value_of(elem); }
             );
             auto stop = std::chrono::high_resolution_clock::now();
-            times.push_back(dur(stop - start).count() * 1000);
+            times.push_back(stopWatch.observe());
             for (auto x : values) {
                 ++copy_count;
             }
@@ -201,12 +164,11 @@ void test_map_type(std::string kind_name, std::vector<int> const & v, output_fil
             double time = 0.0;
             for (auto e : v) {
                 auto const key = make_key<KeyType>(e);
-                auto start = std::chrono::high_resolution_clock::now();
+                StopWatch stopWatch;
                 auto const it = map.find(key);
                 if (it != end_)
                     ++key_count;
-                auto stop = std::chrono::high_resolution_clock::now();
-                time += dur(stop - start).count() * 1000;
+                time += stopWatch.observe();
             }
             times.push_back(time);
         }
@@ -238,15 +200,114 @@ void test(std::size_t size, output_files_t & output_files)
 
     test_map_type<KeyType, ValueType, boost_flat_map, iterations>("boost flat_map", v, output_files);
     test_map_type<KeyType, ValueType, std_map, iterations>("std::map", v, output_files);
-    test_map_type<KeyType, ValueType, split_map, iterations>("split_map", v, output_files);
+//    test_map_type<KeyType, ValueType, split_map, iterations>("split_map", v, output_files);
 
     std::cout << std::endl;
+}
+
+template <typename KeyType, typename ValueType, map_impl_kind MapImpl>
+auto makeMap(std::vector<int> const & v) -> map_impl_t<KeyType, ValueType, MapImpl>
+{
+    using map_t = map_impl_t<KeyType, ValueType, MapImpl>;
+    map_t map;
+
+    for(auto x : v)
+    {
+        auto const key = make_key<KeyType>(x);
+        map[key] = make_value<ValueType>();    
+    }
+    return map;
+}
+
+template <typename KeyType, typename ValueType, map_impl_kind MapImpl, int Iterations, typename _Pred>
+void test2_map_type(std::string kind_name, std::vector<int> const & v1,std::vector<int> const & v2, output_files_t & /*output_files*/, _Pred pred)
+{
+    using map_t = map_impl_t<KeyType, ValueType, MapImpl>;
+
+    std::vector<int> vUnion, vIntersection;
+
+    std::set_union(v1.begin(), v1.end(), v2.begin(), v2.end(), std::back_inserter(vUnion));
+    //std::set_intersection(v1.begin(), v1.end(), v2.begin(), v2.end(), std::back_inserter(vIntersection));
+
+    map_t map1 = makeMap<KeyType, ValueType, MapImpl>(v1);
+    map_t map2 = makeMap<KeyType, ValueType, MapImpl>(v2);
+    map_t mapUnion = makeMap<KeyType, ValueType, MapImpl>(vUnion);
+
+    kind_name += ':';
+    kind_name += std::string(40 - kind_name.size(), ' ');
+
+    {
+        std::vector<double> times;
+        for (int i = 0; i < Iterations; ++i) {
+            map_t map12 = map1;
+            map_t map2_copy = map2;
+            StopWatch stopWatch;
+            pred(map12, map2_copy);
+            times.push_back(stopWatch.observe());
+            if(mapUnion != map12)
+            {
+                // Prevent the optimizer form getting too aggressive.
+                abort();
+            }
+        }
+        auto const elapsed = single_elapsed_value(times);
+        //output_files.ofs[MapImpl] << "'insert': " << elapsed << ",";
+        std::cout << "  " << kind_name << elapsed << " ms merge\n";
+    }
+
+    //output_files.ofs[MapImpl] << "},\n";
+}
+
+template <typename KeyType, typename ValueType>
+void test2(std::size_t size, output_files_t & output_files)
+{
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, size*2);
+
+    auto rand = [&]() {
+        return dist(gen);
+    };
+
+    std::vector<int> v1(size), v2(size);
+    std::generate(v1.begin(), v1.end(), rand);
+    std::generate(v2.begin(), v2.end(), rand);
+    std::sort(v1.begin(), v1.end());
+    std::sort(v2.begin(), v2.end());
+    v1.erase(std::unique(v1.begin(), v1.end()), v1.end());
+    v2.erase(std::unique(v2.begin(), v2.end()), v2.end());
+
+    int const iterations = 7;
+
+    test2_map_type<KeyType, ValueType, std_map, iterations>("std::map", v1, v2, output_files,
+    [](auto &map1, auto &map2)
+    {
+        map1.merge(map2);
+    });
+    test2_map_type<KeyType, ValueType, boost_flat_map, iterations>("boost flat_map", v1, v2, output_files,
+    [](auto &map1, auto &map2)
+    {
+        map1.merge(map2);
+    });
+    test2_map_type<KeyType, ValueType, split_map, iterations>("flat_map insert sort", v1, v2, output_files,
+    [](auto &map1, auto &map2)
+    {
+        map1.insert(map2.begin(), map2.end());
+    });
+    test2_map_type<KeyType, ValueType, split_map, iterations>("flat_map", v1, v2, output_files,
+    [](auto &map1, auto &map2)
+    {
+        map1.merge(map2);
+    });
+
+//    std::cout << std::endl;
 }
 
 #define TEST(key_t, value_t, size)                              \
     std::cout << "<" << #key_t << ", " << #value_t << ">, "     \
               << (size) << " elements:\n";                      \
-    test<key_t, value_t>((size), output_files)
+    /*test<key_t, value_t>((size), output_files);*/ \
+    test2<key_t, value_t>((size), output_files)
 
 int main()
 {
@@ -273,10 +334,10 @@ int main()
     TEST(int, int, 8u << 10);
     TEST(int, int, 8u << 11);
     TEST(int, int, 8u << 12);
-#if 0
     TEST(int, int, 8u << 13);
     TEST(int, int, 8u << 14);
     TEST(int, int, 8u << 15);
+#if 0
 #endif
 #else
     TEST(int, int, 10u);
@@ -305,10 +366,10 @@ int main()
     TEST(std::string, std::string, 8u << 10);
     TEST(std::string, std::string, 8u << 11);
     TEST(std::string, std::string, 8u << 12);
-#if 0
     TEST(std::string, std::string, 8u << 13);
     TEST(std::string, std::string, 8u << 14);
     TEST(std::string, std::string, 8u << 15);
+#if 0
 #endif
 #else
     TEST(std::string, std::string, 10u);
@@ -321,6 +382,4 @@ int main()
     for (auto & of : output_files.ofs) {
         of << "]\n";
     }
-
-    return 0;
 }

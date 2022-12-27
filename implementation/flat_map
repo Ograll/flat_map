@@ -748,6 +748,11 @@ namespace std {
                 __inserted_last,
                 value_comp());
 #endif
+            __mutable_first = __mutable_iterator(__c.keys.begin(), __c.values.begin());
+            __mutable_iterator __mutable_last = __mutable_iterator(__c.keys.end(), __c.values.end());
+            __mutable_last = std::unique(__mutable_first, __mutable_last);
+            __c.keys.erase(__mutable_last.__key_iter(), __c.keys.end());
+            __c.values.erase(__mutable_last.__mapped_iter(), __c.values.end());
         }
         template<class _InputIterator>
         void
@@ -1149,6 +1154,175 @@ namespace std {
             return __x.swap(__y);
         }
 
+        void merge(flat_map &other)
+        {
+            // NOTE: This code assumes broadly that a std::vector is used, though not directly. One could use SFINAE to dispatch the code when a 
+            // vector is not used.
+            //
+            // Obvious optimizations.
+            if(empty())
+            {
+                swap(other);
+                return;
+            }
+            if(other.empty())
+            {
+                return;
+            }
+
+            size_t intersect;
+            __Counter<key_type> counter(intersect);
+            std::set_intersection(__c.keys.begin(), __c.keys.end(), other.__c.keys.begin(), other.__c.keys.end(), back_inserter(counter), __compare);
+            size_t toAdd = other.size() - intersect;
+
+            if(toAdd == 0)
+            {
+                // The data coming in only consists of duplicates of data already here.
+                return;
+            }
+
+            // Add the first to add items to the end of the set then reverse then, then do the rest of the work.
+            // We have to use size_t due to iterator invalidation rules of std::vector.
+            size_t cursorThis = size() - 1;
+            size_t cursorOther = other.size() - 1;
+            // This is the end cursor of this before we started adding items to the end.
+            size_t endThisBefore = size();
+            // Overflow of unsigned type is defined in the standard.
+            size_t endSize = ((size_type)0) - 1;
+            size_t writeOther = other.size() - 1;
+
+            while( toAdd && cursorThis != endSize && cursorOther != endSize)
+            {
+                // If this >= other then prefer this.
+                if (!__compare(*(__c.keys.begin() + cursorThis),
+                            *(other.__c.keys.begin() + cursorOther)))
+                {
+                    // Take it.
+                    __c.keys.push_back(std::move(*(__c.keys.begin() + cursorThis)));
+                    __c.values.push_back(std::move(*(__c.values.begin() + cursorThis)));
+                    cursorThis--;
+
+                    // Determine if the next item in other is the same value if it is, skip it.
+                    if( __compare(*(other.__c.keys.begin() + cursorOther), *(__c.keys.end() - 1)) == false)
+                    {
+                        if (writeOther != cursorOther)
+                        {
+                            *(other.__c.keys.begin() + writeOther) = std::move(*(other.__c.keys.begin() + cursorOther));
+                            *(other.__c.values.begin() + writeOther) = std::move(*(other.__c.values.begin() + cursorOther));
+                        }
+                        writeOther--;
+                        cursorOther--;
+                    }
+                }
+                else
+                {
+                    // Take it. This also means the item doesn't exist on other.
+                    __c.keys.push_back(std::move(*(other.__c.keys.begin() + cursorOther)));
+                    __c.values.push_back(std::move(*(other.__c.values.begin() + cursorOther)));
+                    cursorOther--;
+                }
+                toAdd--;
+            }
+            if(toAdd)
+            {
+                if(cursorThis != endSize)
+                {
+                    while(toAdd)
+                    {
+                        __c.keys.push_back(std::move(*(__c.keys.begin() + cursorThis)));
+                        __c.values.push_back(std::move(*(__c.values.begin() + cursorThis)));
+                        cursorThis--;
+                        toAdd--;
+                    }
+                }
+                else // if (cursorOther != endSize)
+                {
+                    while(toAdd)
+                    {
+                        __c.keys.push_back(std::move(*(other.__c.keys.begin() + cursorOther)));
+                        __c.values.push_back(std::move(*(other.__c.values.begin() + cursorOther)));
+                        cursorOther--;
+                        toAdd--;
+                    }
+                }
+            }
+            // This could be avoided if we managed our own container, or could pierce into std::vector
+            // directly, as a stl implementation could.
+            std::reverse(__c.keys.begin() + endThisBefore, __c.keys.end());
+            std::reverse(__c.values.begin() + endThisBefore, __c.values.end());
+
+            // Now preform the standard algorithm.
+            size_t writeCursor = endThisBefore - 1;
+            while( cursorThis != endSize && cursorOther != endSize)
+            {
+                // If this >= other then prefer this.
+                if(!__compare(*(__c.keys.begin() + cursorThis),
+                            *(other.__c.keys.begin() + cursorOther)))
+                {
+                    // Take it.
+                    if(writeCursor != cursorThis)
+                    {
+                        *(__c.keys.begin() + writeCursor) = std::move(*(__c.keys.begin() + cursorThis));
+                        *(__c.values.begin() + writeCursor) = std::move(*(__c.values.begin() + cursorThis));
+                    }
+                    cursorThis--;
+
+                    // Determine if the next item in other is the same value if it is, skip it.
+                    if( __compare(*(other.__c.keys.begin() + cursorOther), *(__c.keys.begin() + writeCursor)) == false)
+                    {
+                        if (writeOther != cursorOther)
+                        {
+                            *(other.__c.keys.begin() + writeOther) = std::move(*(other.__c.keys.begin() + cursorOther));
+                            *(other.__c.values.begin() + writeOther) = std::move(*(other.__c.values.begin() + cursorOther));
+                        }
+                        writeOther--;
+                        cursorOther--;
+                    }
+                }
+                else
+                {
+                    *(__c.keys.begin() + writeCursor) = std::move(*(other.__c.keys.begin() + cursorOther));
+                    *(__c.values.begin() + writeCursor) = std::move(*(other.__c.values.begin() + cursorOther));
+                    cursorOther--;
+                }
+                writeCursor--;
+            }
+            // Only one or none of these paths shall be taken.
+            if(cursorThis != endSize)
+            {
+                // Optimize for the case where there is nothing to move.
+                if(writeCursor != cursorThis)
+                {
+                    while(cursorThis != endSize)
+                    {
+                        *(__c.keys.begin() + writeCursor) = std::move(*(__c.keys.begin() + cursorThis));
+                        *(__c.values.begin() + writeCursor) = std::move(*(__c.values.begin() + cursorThis));
+                        cursorThis--;
+                        writeCursor--;
+                    }
+                }
+                else
+                {
+                    cursorThis = endSize;
+                    writeCursor = endSize;
+                }
+            }
+            while (cursorOther != endSize)
+            {
+                *(__c.keys.begin() + writeCursor) = std::move(*(other.__c.keys.begin() + cursorOther));
+                *(__c.values.begin() + writeCursor) = std::move(*(other.__c.values.begin() + cursorOther));
+                cursorOther--;
+                writeCursor--;
+            }
+            // Invariants
+            // writeCursor == endSize
+            // currentOther == endSize
+            // currentThis == endSize
+            // writeOther == endSize
+            other.__c.keys.erase(other.__c.keys.begin(), other.__c.keys.begin() + (writeOther + 1));
+            other.__c.values.erase(other.__c.values.begin(), other.__c.values.begin() + (writeOther + 1));
+        }
+
     private:
         containers __c;        // exposition only
         key_compare __compare; // exposition only
@@ -1165,6 +1339,26 @@ namespace std {
 
         private:
             flat_map * __fm_;
+        };
+
+        // exposition only
+        template <class T>
+        struct __Counter
+        {
+            using value_type = T;
+            __Counter() = delete;
+            __Counter(const __Counter&) = delete;
+            __Counter &operator=(const __Counter&) = delete;
+            __Counter(size_t& count_) : count(count_)
+            {
+                count = 0;
+            }
+            void push_back(const value_type&)
+            {
+                count++;
+            }
+        private:
+            size_t& count;
         };
 
         using __key_iter_t = typename _KeyContainer::iterator;
